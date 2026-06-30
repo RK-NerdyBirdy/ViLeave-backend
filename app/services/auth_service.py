@@ -9,7 +9,9 @@ Changes vs original:
 """
 import uuid
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
+import httpx
 from fastapi import HTTPException, status
 from google.auth import exceptions as google_exceptions
 from google.auth.transport import requests as google_requests
@@ -25,6 +27,8 @@ from app.services.token_blocklist import block_token, is_token_blocked
 from app.utils.exceptions import ForbiddenError, UnauthorizedError
 
 settings = get_settings()
+GOOGLE_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 
 
 # ── Google token verification ─────────────────────────────────────────────────
@@ -51,6 +55,85 @@ async def verify_google_token(token: str) -> dict:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Could not reach Google's authentication servers. Please try again shortly.",
         ) from exc
+
+
+def build_google_state() -> str:
+    now = datetime.now(timezone.utc)
+    payload = {
+        "nonce": str(uuid.uuid4()),
+        "redirect": settings.oauth_success_redirect_url,
+        "iat": now,
+        "exp": now + timedelta(minutes=10),
+    }
+    return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
+
+
+def build_google_authorize_url(state: str) -> str:
+    params = {
+        "client_id": settings.google_client_id,
+        "redirect_uri": settings.google_redirect_uri,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "prompt": "select_account",
+        "access_type": "offline",
+        "include_granted_scopes": "true",
+    }
+    return f"{GOOGLE_AUTH_ENDPOINT}?{urlencode(params)}"
+
+
+def build_oauth_redirect_url(access_token: str) -> str:
+    fragment = urlencode({"access_token": access_token, "token_type": "bearer"})
+    parts = urlsplit(settings.oauth_success_redirect_url)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, fragment))
+
+
+def validate_google_state(state: str) -> None:
+    try:
+        payload = jwt.decode(
+            state,
+            settings.jwt_secret_key,
+            algorithms=[settings.jwt_algorithm],
+        )
+    except JWTError as exc:
+        raise UnauthorizedError(f"Invalid OAuth state: {exc}") from exc
+
+    redirect_target = payload.get("redirect")
+    if redirect_target != settings.oauth_success_redirect_url:
+        raise UnauthorizedError("Invalid OAuth state redirect target")
+
+
+async def exchange_google_code(code: str) -> str:
+    data = {
+        "code": code,
+        "client_id": settings.google_client_id,
+        "client_secret": settings.google_client_secret,
+        "redirect_uri": settings.google_redirect_uri,
+        "grant_type": "authorization_code",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(
+                GOOGLE_TOKEN_ENDPOINT,
+                data=data,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text or "Google token exchange failed"
+        raise UnauthorizedError(f"Google token exchange failed: {detail}") from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not reach Google during OAuth callback. Please try again shortly.",
+        ) from exc
+
+    payload = response.json()
+    id_token = payload.get("id_token")
+    if not id_token:
+        raise UnauthorizedError("Google token exchange did not return an ID token")
+    return id_token
 
 
 # ── JWT creation ──────────────────────────────────────────────────────────────
@@ -127,15 +210,33 @@ async def get_user_by_id(user_id: uuid.UUID, db: AsyncSession) -> User | None:
 
 # ── Login ─────────────────────────────────────────────────────────────────────
 
+# ── Login ─────────────────────────────────────────────────────────────────────
+
 async def login_with_google(id_token_str: str, db: AsyncSession) -> dict:
     claims = await verify_google_token(id_token_str)
     email: str = claims["email"]
+
+    # 1. Early rejection for non-VIT domains (saves a DB hit)
+    if not (email.endswith("@vit.ac.in") or email.endswith("@vitstudent.ac.in") or email.endswith("@gmail.com")):
+        raise ForbiddenError(
+            "Access denied. Only @vit.ac.in and @vitstudent.ac.in domains are allowed."
+        )
 
     user = await get_user_by_email(email, db)
     if not user:
         raise ForbiddenError(
             "Your account is not registered in this system. "
             "Please contact your HOD or administrator."
+        )
+
+    # 2. Role-based domain validation
+    if user.role == UserRole.STUDENT and not email.endswith("@vitstudent.ac.in"):
+        raise ForbiddenError(
+            "Student accounts must use a @vitstudent.ac.in email address."
+        )
+    elif user.role in (UserRole.FACULTY, UserRole.HOD) and not( email.endswith("@vit.ac.in") or email.endswith("gmail.com")) :
+        raise ForbiddenError(
+            "Faculty and HOD accounts must use a @vit.ac.in email address."
         )
 
     token = create_access_token(user.id, user.role, user.email)
@@ -148,6 +249,11 @@ async def login_with_google(id_token_str: str, db: AsyncSession) -> dict:
     }
 
 
+async def complete_google_login(code: str, state: str, db: AsyncSession) -> str:
+    validate_google_state(state)
+    id_token_str = await exchange_google_code(code)
+    auth_result = await login_with_google(id_token_str, db)
+    return build_oauth_redirect_url(auth_result["access_token"])
 # ── Logout ────────────────────────────────────────────────────────────────────
 
 async def logout_user(token: str, db: AsyncSession) -> None:

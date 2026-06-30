@@ -26,12 +26,19 @@ class Settings(BaseSettings):
 
     # ── Google OAuth ──────────────────────────────────────────────────────────
     google_client_id: str
+    google_client_secret: str
+    oauth_success_redirect_url: str = "http://localhost:3000/auth/callback"
+
+    @property
+    def google_redirect_uri(self) -> str:
+        return f"{self.app_base_url.rstrip('/')}/auth/google/callback"
 
     # ── Cloudflare R2 ─────────────────────────────────────────────────────────
     r2_account_id: str
     r2_access_key_id: str
     r2_secret_access_key: str
     r2_bucket_name: str
+    r2_endpoint: str
     r2_public_url: str              # https://<account-id>.r2.cloudflarestorage.com
 
     # ── Gmail SMTP ────────────────────────────────────────────────────────────

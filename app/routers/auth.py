@@ -1,18 +1,25 @@
 """
 app/routers/auth.py  (UPDATED)
 ───────────────────────────────
-POST /auth/google  — Exchange Google ID token for our JWT
+GET  /auth/google         — Start Google OAuth sign-in
+GET  /auth/google/callback — Exchange Google auth code and redirect with JWT
 GET  /auth/me      — Return current user info
 POST /auth/logout  — Blocklist the current token (real server-side invalidation)
 """
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.dependencies import CurrentUser, DBSession
-from app.schemas.auth import GoogleTokenRequest, TokenResponse
-from app.services.auth_service import login_with_google, logout_user
+from app.services.auth_service import (
+    build_google_authorize_url,
+    build_google_state,
+    complete_google_login,
+    logout_user,
+)
+from app.utils.exceptions import UnauthorizedError
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -20,19 +27,34 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 _bearer = HTTPBearer(auto_error=False)
 
 
-@router.post("/google", response_model=TokenResponse, summary="Login with Google OAuth")
-async def google_login(body: GoogleTokenRequest, db: DBSession):
+@router.get("/google", summary="Start Google OAuth login")
+async def google_login():
     """
-    Accepts a Google ID token from the frontend (obtained after the user
-    completes Google Sign-In in the browser).
+    Starts the Google OAuth authorization-code flow.
 
-    Verifies the token with Google's public keys, then checks if the email
-    exists and is active in our database.
-
-    Returns our own short-lived JWT. Include it in all subsequent requests:
-    `Authorization: Bearer <token>`
+    The browser is redirected to Google, then Google sends the user back to
+    `/auth/google/callback` with a code. The callback redirects again to the
+    configured success URL with the JWT in the URL fragment.
     """
-    return await login_with_google(body.id_token, db)
+    state = build_google_state()
+    return RedirectResponse(url=build_google_authorize_url(state), status_code=307)
+
+
+@router.get("/google/callback", summary="Handle Google OAuth callback")
+async def google_callback(
+    db: DBSession,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+):
+    if error:
+        raise UnauthorizedError(f"Google OAuth failed: {error}")
+
+    if not code or not state:
+        raise UnauthorizedError("Missing Google OAuth callback parameters")
+
+    redirect_url = await complete_google_login(code=code, state=state, db=db)
+    return RedirectResponse(url=redirect_url, status_code=303)
 
 
 @router.get("/me", summary="Get current user profile")

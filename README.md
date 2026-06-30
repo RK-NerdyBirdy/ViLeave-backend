@@ -6,7 +6,7 @@ FastAPI backend for a college medical leave management system.
 - **Framework:** FastAPI (async)
 - **Database:** PostgreSQL via SQLAlchemy 2.0 (asyncpg) + Alembic
 - **Storage:** Cloudflare R2 (S3-compatible) for PDF medical certificates
-- **Auth:** Google OAuth → server-issued JWT (with DB-backed revocation/blocklist)
+- **Auth:** Google OAuth authorization-code flow → server-issued JWT in redirect URL fragment
 - **Email:** Gmail SMTP via `aiosmtplib` (async, non-blocking)
 
 ## Setup
@@ -25,6 +25,8 @@ cp .env.example .env
 #   - DATABASE_URL / SYNC_DATABASE_URL (Postgres connection strings)
 #   - JWT_SECRET_KEY (generate with: openssl rand -hex 32)
 #   - GOOGLE_CLIENT_ID (from Google Cloud Console OAuth credentials)
+#   - GOOGLE_CLIENT_SECRET (from Google Cloud Console OAuth credentials)
+#   - OAUTH_SUCCESS_REDIRECT_URL (frontend URL that should receive the JWT fragment)
 #   - R2_* (from Cloudflare R2 dashboard → Manage API Tokens)
 #   - SMTP_USERNAME / SMTP_PASSWORD (Gmail App Password, NOT your account password —
 #     generate one at https://myaccount.google.com/apppasswords)
@@ -136,10 +138,18 @@ entirely in memory (`io.BytesIO`), containing a `manifest.csv` plus a
 `{registration_no}_{student_name}_{start_date}_to_{end_date}.pdf`. Filenames
 are sanitised to strip path-traversal characters and unsafe symbols.
 
-## Testing the bootstrap → login flow locally without real Google OAuth
+## Testing Google OAuth locally
 
-For local development without setting up real Google OAuth credentials, you
-can mint a JWT directly for testing:
+For local development, start the login flow at `GET /auth/google`. After the
+Google callback completes, the browser is redirected to the configured
+`OAUTH_SUCCESS_REDIRECT_URL` with the JWT in the URL fragment:
+
+```text
+http://localhost:3000/auth/callback#access_token=<jwt>&token_type=bearer
+```
+
+If you need to test HOD-only endpoints without running the browser OAuth flow,
+you can still mint a JWT directly for testing:
 
 ```python
 from app.services.auth_service import create_access_token
