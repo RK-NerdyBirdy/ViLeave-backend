@@ -1,0 +1,33 @@
+# Web framework
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+
+# Database
+sqlalchemy==2.0.36
+alembic==1.14.0
+asyncpg==0.30.0          # async PostgreSQL driver
+psycopg2-binary==2.9.10  # sync driver for Alembic env.py
+
+# Auth
+google-auth==2.36.0
+python-jose[cryptography]==3.3.0
+
+# Storage (Cloudflare R2 is S3-compatible)
+boto3==1.35.82
+
+# Email
+aiosmtplib==3.0.2
+jinja2==3.1.4            # HTML email templates
+
+# Validation & settings
+pydantic==2.10.3
+pydantic-settings==2.6.1
+python-multipart==0.0.20 # Required for UploadFile / Form
+email-validator==2.2.0
+
+# CSV parsing
+python-dateutil==2.9.0.post0
+
+# Utilities
+httpx==0.28.1            # async HTTP for Google token verification
+python-dotenv==1.0.1
