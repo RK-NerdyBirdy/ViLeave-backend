@@ -31,3 +31,4 @@ python-dateutil==2.9.0.post0
 # Utilities
 httpx==0.28.1            # async HTTP for Google token verification
 python-dotenv==1.0.1
+requests==2.32.3

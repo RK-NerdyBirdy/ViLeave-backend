@@ -137,6 +137,11 @@ def create_app() -> FastAPI:
     async def health_check():
         """Used by load balancers and monitoring to verify the service is alive."""
         return {"status": "ok", "version": "1.0.0"}
+    
+    # Notice the .api_route here!
+    @app.api_route("/pinggg", methods=["GET", "HEAD"])
+    async def ping():
+        return {"status": "awake"}
 
     return app
 
