@@ -15,7 +15,8 @@ from sqlalchemy import (
     Boolean, DateTime, Enum, ForeignKey,
     String, func,
 )
-from sqlalchemy.dialects.postgresql import UUID
+# NEW: Import ARRAY from postgresql dialect
+from sqlalchemy.dialects.postgresql import UUID, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -33,7 +34,7 @@ class UserRole(str, enum.Enum):
 
 class User(Base):
     """
-    Central identity table.  Every authenticated person has exactly one row.
+    Central identity table. Every authenticated person has exactly one row.
     Google OAuth email is the unique identifier used for login.
     """
     __tablename__ = "users"
@@ -43,7 +44,10 @@ class User(Base):
     )
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    role: Mapped[UserRole] = mapped_column(Enum(UserRole), nullable=False)
+    
+    # UPDATED: 'roles' is now an Array of Enums
+    roles: Mapped[list[UserRole]] = mapped_column(ARRAY(Enum(UserRole)), nullable=False)
+    
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -62,12 +66,12 @@ class User(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<User id={self.id} email={self.email} role={self.role}>"
+        return f"<User id={self.id} email={self.email} roles={self.roles}>"
 
 
 class Student(Base):
     """
-    Student-specific profile.  1:1 with User (joined table).
+    Student-specific profile. 1:1 with User (joined table).
     `proctor_id` points to Faculty and is immutable once a leave request
     has been submitted (enforced at the service layer).
     """
@@ -99,7 +103,7 @@ class Student(Base):
 
 class Faculty(Base):
     """
-    Faculty / HOD profile.  Role distinction (FACULTY vs HOD) lives on User.role.
+    Faculty / HOD profile. Role distinction (FACULTY vs HOD) lives on User.roles.
     A HOD row exists here too — they can be assigned as a proctor and participate
     in the regular proctor workflow.
     """

@@ -57,13 +57,14 @@ async def verify_google_token(token: str) -> dict:
         ) from exc
 
 
-def build_google_state() -> str:
+def build_google_state(role: str) -> str:
     now = datetime.now(timezone.utc)
     payload = {
         "nonce": str(uuid.uuid4()),
         "redirect": settings.oauth_success_redirect_url,
         "iat": now,
         "exp": now + timedelta(minutes=10),
+        "role": role,  # Embed the requested role here
     }
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
@@ -88,7 +89,7 @@ def build_oauth_redirect_url(access_token: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, fragment))
 
 
-def validate_google_state(state: str) -> None:
+def validate_google_state(state: str) -> dict:
     try:
         payload = jwt.decode(
             state,
@@ -101,6 +102,8 @@ def validate_google_state(state: str) -> None:
     redirect_target = payload.get("redirect")
     if redirect_target != settings.oauth_success_redirect_url:
         raise UnauthorizedError("Invalid OAuth state redirect target")
+    
+    return payload # Return the payload to extract the role
 
 
 async def exchange_google_code(code: str) -> str:
@@ -212,47 +215,60 @@ async def get_user_by_id(user_id: uuid.UUID, db: AsyncSession) -> User | None:
 
 # ── Login ─────────────────────────────────────────────────────────────────────
 
-async def login_with_google(id_token_str: str, db: AsyncSession) -> dict:
+async def login_with_google(id_token_str: str, db: AsyncSession, requested_role: str) -> dict:
     claims = await verify_google_token(id_token_str)
     email: str = claims["email"]
 
-    # 1. Early rejection for non-VIT domains (saves a DB hit)
+    # 1. Early rejection for non-VIT domains
     if not (email.endswith("@vit.ac.in") or email.endswith("@vitstudent.ac.in") or email.endswith("@gmail.com")):
-        raise ForbiddenError(
-            "Access denied. Only @vit.ac.in and @vitstudent.ac.in domains are allowed."
-        )
+        raise ForbiddenError("Access denied. Only VIT domains are allowed.")
 
+    # 2. Fetch user
     user = await get_user_by_email(email, db)
     if not user:
+        raise ForbiddenError("Your account is not registered in this system.")
+
+    # Convert their DB roles to a list of strings for easy checking
+    user_role_values = [r.value for r in user.roles]
+
+    # 3. STRICT CHECK: Is the requested portal inside their allowed roles?
+    if requested_role not in user_role_values:
         raise ForbiddenError(
-            "Your account is not registered in this system. "
-            "Please contact your HOD or administrator."
+            f"Access denied. You do not have permissions for the '{requested_role}' portal. "
+            "Please go back and select the correct login button."
         )
 
-    # 2. Role-based domain validation
-    if user.role == UserRole.STUDENT and not email.endswith("@vitstudent.ac.in"):
-        raise ForbiddenError(
-            "Student accounts must use a @vitstudent.ac.in email address."
-        )
-    elif user.role in (UserRole.FACULTY, UserRole.HOD) and not( email.endswith("@vit.ac.in") or email.endswith("gmail.com")) :
-        raise ForbiddenError(
-            "Faculty and HOD accounts must use a @vit.ac.in email address."
-        )
+    # 4. Domain Validation
+    if requested_role == UserRole.STUDENT.value and not email.endswith("@vitstudent.ac.in"):
+        raise ForbiddenError("Students must use @vitstudent.ac.in.")
+    elif requested_role in (UserRole.FACULTY.value, UserRole.HOD.value) and not (email.endswith("@vit.ac.in") or email.endswith("@gmail.com")):
+        raise ForbiddenError("Faculty/HOD must use @vit.ac.in.")
 
-    token = create_access_token(user.id, user.role, user.email)
+    # 5. ISSUE A SCOPED TOKEN: 
+    # We do NOT put all their roles in the token. We ONLY put the role they requested.
+    # This guarantees they can't use a Proctor token to hit HOD endpoints.
+    
+    token = create_access_token(user.id, UserRole(requested_role), user.email)
+    
     return {
         "access_token": token,
         "token_type":   "bearer",
-        "role":         user.role,
+        "active_role":  requested_role, # The portal they are currently logged into
         "full_name":    user.full_name,
         "email":        user.email,
     }
 
 
 async def complete_google_login(code: str, state: str, db: AsyncSession) -> str:
-    validate_google_state(state)
+    # Get the payload and extract the role
+    state_payload = validate_google_state(state)
+    requested_role = state_payload.get("role")
+    
+    if not requested_role:
+        raise UnauthorizedError("Authentication state is missing role information.")
+
     id_token_str = await exchange_google_code(code)
-    auth_result = await login_with_google(id_token_str, db)
+    auth_result = await login_with_google(id_token_str, db, requested_role)
     return build_oauth_redirect_url(auth_result["access_token"])
 # ── Logout ────────────────────────────────────────────────────────────────────
 

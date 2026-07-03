@@ -1,10 +1,5 @@
 """
 app/routers/auth.py  (UPDATED)
-───────────────────────────────
-GET  /auth/google         — Start Google OAuth sign-in
-GET  /auth/google/callback — Exchange Google auth code and redirect with JWT
-GET  /auth/me      — Return current user info
-POST /auth/logout  — Blocklist the current token (real server-side invalidation)
 """
 from typing import Annotated
 
@@ -20,23 +15,16 @@ from app.services.auth_service import (
     logout_user,
 )
 from app.utils.exceptions import UnauthorizedError
+from app.models.user import UserRole
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
-# Secondary bearer extractor — needed to get the raw token string for blocklisting
 _bearer = HTTPBearer(auto_error=False)
 
 
 @router.get("/google", summary="Start Google OAuth login")
-async def google_login():
-    """
-    Starts the Google OAuth authorization-code flow.
-
-    The browser is redirected to Google, then Google sends the user back to
-    `/auth/google/callback` with a code. The callback redirects again to the
-    configured success URL with the JWT in the URL fragment.
-    """
-    state = build_google_state()
+async def google_login(role: UserRole):
+    state = build_google_state(role.value)
     return RedirectResponse(url=build_google_authorize_url(state), status_code=307)
 
 
@@ -60,42 +48,24 @@ async def google_callback(
 @router.get("/me", summary="Get current user profile")
 async def get_me(current_user: CurrentUser):
     """
-    Returns the authenticated user's identity and role.
-    Used by the frontend immediately after login to determine which
-    dashboard to render.
+    Returns the authenticated user's identity and active session role.
     """
     return {
-        "id":        str(current_user.id),
-        "email":     current_user.email,
-        "full_name": current_user.full_name,
-        "role":      current_user.role,
-        "is_active": current_user.is_active,
+        "id":          str(current_user.id),
+        "email":       current_user.email,
+        "full_name":   current_user.full_name,
+        "active_role": current_user.active_token_role, # The portal they logged into
+        "all_roles":   current_user.roles,             # All DB permissions
+        "is_active":   current_user.is_active,
     }
 
 
 @router.post("/logout", summary="Logout — invalidate current token")
 async def logout(
-    # Validates the token first; raises 401 if already invalid/expired
     current_user: CurrentUser,
     db: DBSession,
-    # Also extract the raw token string so we can add its JTI to the blocklist
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)] = None,
 ):
-    """
-    **Real server-side logout.**
-
-    Adds the current token's JTI (unique token ID) to a persistent blocklist.
-    Any subsequent request presenting this exact token will receive
-    `401 Unauthorized`, even if the token has not yet reached its natural expiry.
-
-    The client should also discard the token locally after calling this endpoint.
-
-    **Blocklist mechanics:**
-    - JTI is stored in the `token_blocklist` DB table until the token's `exp`.
-    - An in-memory set provides O(1) lookup on every authenticated request
-      with no additional DB round-trip.
-    - Expired entries are pruned automatically by a background task at startup.
-    """
     if credentials:
         await logout_user(token=credentials.credentials, db=db)
 

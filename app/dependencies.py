@@ -5,9 +5,9 @@ FastAPI dependency functions injected into routes via Depends().
 
 Key dependencies:
   - get_current_user   → Any authenticated, active user
-  - require_student    → Must be STUDENT role
-  - require_faculty    → Must be FACULTY or HOD role (proctors)
-  - require_hod        → Must be HOD role only
+  - require_student    → Must be logged in via STUDENT portal
+  - require_faculty    → Must be logged in via FACULTY portal (proctors)
+  - require_hod        → Must be logged in via HOD portal
 
 Usage in a route:
     @router.get("/me")
@@ -43,6 +43,7 @@ async def get_current_user(
         raise UnauthorizedError("No authentication credentials provided")
 
     payload = decode_access_token(credentials.credentials)
+    
     user_id_str: str | None = payload.get("sub")
     if not user_id_str:
         raise UnauthorizedError("Malformed token: missing subject claim")
@@ -56,31 +57,51 @@ async def get_current_user(
     if not user:
         raise ForbiddenError("This account has been deactivated or does not exist")
 
+    # Extract the specific role they used to log in from the JWT
+    token_role_str = payload.get("role")
+    if not token_role_str:
+        raise UnauthorizedError("Malformed token: missing role claim")
+        
+    try:
+        active_role = UserRole(token_role_str)
+    except ValueError:
+        raise UnauthorizedError("Malformed token: invalid role claim")
+
+    # Security Check: Ensure they still have this role in the database 
+    # (in case an admin revoked their HOD status while they were logged in)
+    if active_role not in user.roles:
+        raise ForbiddenError("Your permissions have changed. Please log in again.")
+
+    # Attach the active token role to the user object dynamically 
+    # so the route-specific dependencies can strictly enforce portal boundaries
+    user.active_token_role = active_role
+
     return user
 
 
 async def require_student(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
-    if current_user.role != UserRole.STUDENT:
-        raise ForbiddenError("This endpoint requires Student access")
+    if current_user.active_token_role != UserRole.STUDENT:
+        raise ForbiddenError("This endpoint requires Student access. Please log into the Student portal.")
     return current_user
 
 
 async def require_faculty(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
-    """Both FACULTY and HOD can act as proctors."""
-    if current_user.role not in (UserRole.FACULTY, UserRole.HOD):
-        raise ForbiddenError("This endpoint requires Faculty access")
+    """Strictly requires logging in via the Faculty/Proctor portal."""
+    if current_user.active_token_role != UserRole.FACULTY:
+        raise ForbiddenError("This endpoint requires Faculty access. Please log into the Faculty portal.")
     return current_user
 
 
 async def require_hod(
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> User:
-    if current_user.role != UserRole.HOD:
-        raise ForbiddenError("This endpoint requires HOD access")
+    """Strictly requires logging in via the HOD portal."""
+    if current_user.active_token_role != UserRole.HOD:
+        raise ForbiddenError("This endpoint requires HOD access. Please log into the HOD portal.")
     return current_user
 
 
