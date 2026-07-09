@@ -38,17 +38,14 @@ def _make_r2_key(student_id: uuid.UUID, request_id: uuid.UUID) -> str:
 
 @lru_cache(maxsize=1)
 def _get_s3_client():
-    """
-    Singleton boto3 S3 client configured for Cloudflare R2.
-    lru_cache ensures we create the client once per process,
-    not once per request.
-    """
     return boto3.client(
         "s3",
-        endpoint_url=settings.r2_public_url,
+        # Fix: Use the R2 S3 API Endpoint, NOT the public URL
+        endpoint_url=settings.r2_endpoint, 
+        
         aws_access_key_id=settings.r2_access_key_id,
         aws_secret_access_key=settings.r2_secret_access_key,
-        region_name="auto",   # R2 uses "auto" as the region
+        region_name="auto",  
         config=Config(
             signature_version="s3v4",
             retries={"max_attempts": 3, "mode": "adaptive"},
