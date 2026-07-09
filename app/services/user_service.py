@@ -76,7 +76,7 @@ async def create_student(data: StudentCreate, db: AsyncSession) -> Student:
     user = User(
         email=data.email,
         full_name=data.full_name,
-        role=UserRole.STUDENT,
+        roles=[UserRole.STUDENT],
     )
     db.add(user)
     await db.flush()   # Get the generated UUID
@@ -171,7 +171,7 @@ async def list_students(
 # ── Faculty service ───────────────────────────────────────────────────────────
 
 async def create_faculty(data: FacultyCreate, db: AsyncSession, role: UserRole = UserRole.FACULTY) -> Faculty:
-    user = User(email=data.email, full_name=data.full_name, role=role)
+    user = User(email=data.email, full_name=data.full_name, roles=[role]) 
     db.add(user)
     await db.flush()
 
@@ -357,7 +357,7 @@ async def bulk_ingest_students(csv_bytes: bytes, db: AsyncSession) -> BulkIngest
             continue
 
         try:
-            user = User(email=email, full_name=full_name, role=UserRole.STUDENT)
+            user = User(email=email, full_name=full_name, roles=[UserRole.STUDENT]) 
             db.add(user)
             await db.flush()
 
@@ -417,7 +417,7 @@ async def bulk_ingest_faculty(csv_bytes: bytes, db: AsyncSession) -> BulkIngestR
             continue
 
         try:
-            user = User(email=email, full_name=full_name, role=UserRole.FACULTY)
+            user = User(email=email, full_name=full_name, role=[UserRole.FACULTY])
             db.add(user)
             await db.flush()
 
