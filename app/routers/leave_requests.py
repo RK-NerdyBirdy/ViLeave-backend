@@ -52,7 +52,6 @@ async def _validate_pdf(pdf_file: UploadFile) -> bytes:
 
     return content
 
-
 # ── Student: Submit ───────────────────────────────────────────────────────────
 
 @router.post(
@@ -72,24 +71,24 @@ async def submit_leave_request(
     Submit a new medical leave request.
 
     **Multipart form data:**
-    - `start_date`: YYYY-MM-DD
+    - `start_date`: YYYY-MM-DD (Can be in the past)
     - `end_date`: YYYY-MM-DD
     - `pdf_file`: Medical certificate (PDF, max 10MB)
 
     Validates:
-    - Dates are not in the past
-    - Duration ≤ HOD's global max_leave_days
+    - Duration ≤ HOD's global max_leave_days (Checked in service layer)
     - No overlapping active request for the same period
 
     On success: uploads PDF to R2, creates DB record, emails the assigned proctor.
     """
+    # 1. Basic sanity check: end date cannot be before start date
     if end_date < start_date:
         raise BadRequestError("end_date must be on or after start_date")
-    if start_date < date.today():
-        raise BadRequestError("start_date cannot be in the past")
 
+    # 2. Validate the PDF
     pdf_bytes = await _validate_pdf(pdf_file)
 
+    # 3. Pass to service layer (Duration check happens here)
     return await leave_service.create_leave_request(
         student_user=current_user,
         start_date=start_date,
