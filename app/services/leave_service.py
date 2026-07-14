@@ -341,6 +341,8 @@ async def get_student_requests(
 
 # ── Single request fetch (role-aware) ─────────────────────────────────────────
 
+# ── Single request fetch (role-aware) ─────────────────────────────────────────
+
 async def get_leave_request(
     request_id: uuid.UUID,
     current_user: User,
@@ -348,17 +350,19 @@ async def get_leave_request(
 ) -> LeaveRequestResponse:
     req = await _load_request(request_id, db)
 
-    if current_user.role == UserRole.STUDENT:
+    # UPDATED: Use active_token_role instead of role
+    if current_user.active_token_role == UserRole.STUDENT:
         if req.student.user.id != current_user.id:
             raise ForbiddenError("You can only view your own leave requests")
 
-    elif current_user.role == UserRole.FACULTY:
+    elif current_user.active_token_role == UserRole.FACULTY:
         if req.assigned_proctor.user.id != current_user.id:
             raise ForbiddenError("You can only view requests assigned to you")
 
     # HOD sees everything — no additional check needed
 
     return _build_response(req)
+
 
 
 # ── Proctor actions ───────────────────────────────────────────────────────────
