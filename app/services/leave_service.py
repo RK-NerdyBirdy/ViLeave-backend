@@ -142,22 +142,16 @@ async def create_leave_request(
     end_date: date,
     pdf_bytes: bytes,
     db: AsyncSession,
-    background_tasks: BackgroundTasks, # NEW
+    background_tasks: BackgroundTasks, 
 ) -> LeaveRequestResponse:
-    """
-    Submit a new leave request.
-    Steps:
-      1. Validate duration against HOD's limit
-      2. Check for overlapping active requests
-      3. Upload PDF to R2
-      4. Persist the DB record
-      5. Email the proctor asynchronously (fire-and-forget)
-    """
-    student = student_user.student_profile
+    
+    # FIX: Safely and explicitly query the student profile
+    result = await db.execute(select(Student).where(Student.id == student_user.id))
+    student = result.scalar_one_or_none()
+    
     if not student:
         raise ForbiddenError("Student profile not found")
 
-    # 1. Duration check
     duration = compute_duration(start_date, end_date)
     max_days = await _get_max_leave_days(db)
     if duration > max_days:
@@ -165,18 +159,15 @@ async def create_leave_request(
             f"Requested duration ({duration} days) exceeds the maximum allowed ({max_days} days)"
         )
 
-    # 2. Overlap check
     await _check_overlap(student.id, start_date, end_date, db)
 
-    # 3. Upload PDF
     request_id = uuid.uuid4()
     r2_key = storage.upload_pdf(pdf_bytes, student.id, request_id)
 
-    # 4. Persist
     leave_req = LeaveRequest(
         id=request_id,
         student_id=student.id,
-        assigned_proctor_id=student.proctor_id,   # Snapshot at creation
+        assigned_proctor_id=student.proctor_id,   
         start_date=start_date,
         end_date=end_date,
         duration_days=duration,
@@ -184,12 +175,10 @@ async def create_leave_request(
         pdf_r2_key=r2_key,
     )
     db.add(leave_req)
-    await db.flush()   # Persist without committing — commit happens in get_db()
+    await db.flush()  
 
-    # Reload with relationships for the response
     leave_req = await _load_request(request_id, db)
 
-    # 5. Email proctor (fire-and-forget — failure doesn't abort the request)
     proctor = leave_req.assigned_proctor
     proctor_user = proctor.user
     pdf_url = storage.generate_presigned_url(r2_key, expires_in=86400)
@@ -218,18 +207,12 @@ async def update_leave_request(
     pdf_bytes: bytes | None,
     db: AsyncSession,
 ) -> LeaveRequestResponse:
-    """
-    Student edits a pending request.
-    Only allowed while status == PENDING_PROCTOR.
-    """
     req = await _load_request(request_id, db)
-    student = student_user.student_profile
 
-    # Ownership check
-    if req.student_id != student.id:
+    # FIX: Use student_user.id directly
+    if req.student_id != student_user.id:
         raise ForbiddenError("You can only edit your own leave requests")
 
-    # State guard
     if req.status != LeaveStatus.PENDING_PROCTOR:
         raise BadRequestError(
             "This request can no longer be edited — it has already been reviewed by your proctor"
@@ -241,7 +224,6 @@ async def update_leave_request(
     if new_end < new_start:
         raise BadRequestError("end_date must be on or after start_date")
 
-    # Duration check
     duration = compute_duration(new_start, new_end)
     max_days = await _get_max_leave_days(db)
     if duration > max_days:
@@ -249,20 +231,17 @@ async def update_leave_request(
             f"Updated duration ({duration} days) exceeds the maximum allowed ({max_days} days)"
         )
 
-    # Overlap check (exclude self)
-    await _check_overlap(student.id, new_start, new_end, db, exclude_id=request_id)
+    await _check_overlap(student_user.id, new_start, new_end, db, exclude_id=request_id)
 
-    # Replace PDF if a new one was uploaded
     if pdf_bytes:
         old_key = req.pdf_r2_key
-        new_key = storage.upload_pdf(pdf_bytes, student.id, request_id)
+        new_key = storage.upload_pdf(pdf_bytes, student_user.id, request_id)
         req.pdf_r2_key = new_key
-        # Delete old PDF after successful upload
         if old_key:
             try:
                 storage.delete_object(old_key)
             except StorageError:
-                pass  # Old file cleanup failure is non-critical
+                pass 
 
     req.start_date   = new_start
     req.end_date     = new_end
@@ -277,15 +256,10 @@ async def delete_leave_request(
     student_user: User,
     db: AsyncSession,
 ) -> None:
-    """
-    Student withdraws a pending request.
-    Only allowed while status == PENDING_PROCTOR.
-    Hard-deletes the R2 object; soft-deletes the DB record.
-    """
     req = await _load_request(request_id, db)
-    student = student_user.student_profile
 
-    if req.student_id != student.id:
+    # FIX: Use student_user.id directly
+    if req.student_id != student_user.id:
         raise ForbiddenError("You can only delete your own leave requests")
 
     if req.status != LeaveStatus.PENDING_PROCTOR:
@@ -293,14 +267,12 @@ async def delete_leave_request(
             "This request cannot be deleted — it has already been reviewed by your proctor"
         )
 
-    # Hard delete from R2
     if req.pdf_r2_key:
         try:
             storage.delete_object(req.pdf_r2_key)
         except StorageError as exc:
             raise BadRequestError(f"Could not remove document from storage: {exc}") from exc
 
-    # Soft delete in DB
     req.is_deleted = True
     req.deleted_at = datetime.now(timezone.utc)
     req.pdf_r2_key = None
@@ -314,11 +286,11 @@ async def get_student_requests(
     page: int = 1,
     limit: int = 20,
 ) -> dict:
-    student = student_user.student_profile
     base_query = (
         select(LeaveRequest)
         .where(
-            LeaveRequest.student_id == student.id,
+            # FIX: Use student_user.id directly
+            LeaveRequest.student_id == student_user.id,
             LeaveRequest.is_deleted == False,  # noqa: E712
         )
         .options(
@@ -345,11 +317,6 @@ async def get_student_requests(
         "items": [_build_response(r) for r in items],
     }
 
-
-# ── Single request fetch (role-aware) ─────────────────────────────────────────
-
-# ── Single request fetch (role-aware) ─────────────────────────────────────────
-
 async def get_leave_request(
     request_id: uuid.UUID,
     current_user: User,
@@ -357,11 +324,12 @@ async def get_leave_request(
 ) -> LeaveRequestResponse:
     req = await _load_request(request_id, db)
 
-    if current_user.roles == UserRole.STUDENT:
+    # FIX: Use active_token_role, not roles
+    if current_user.active_token_role == UserRole.STUDENT:
         if req.student.user.id != current_user.id:
             raise ForbiddenError("You can only view your own leave requests")
 
-    elif current_user.roles == UserRole.FACULTY:
+    elif current_user.active_token_role == UserRole.FACULTY:
         if req.assigned_proctor.user.id != current_user.id:
             raise ForbiddenError("You can only view requests assigned to you")
 
@@ -380,11 +348,11 @@ async def get_proctor_requests(
     page: int = 1,
     limit: int = 20,
 ) -> dict:
-    faculty = faculty_user.faculty_profile
     base_query = (
         select(LeaveRequest)
         .where(
-            LeaveRequest.assigned_proctor_id == faculty.id,
+            # FIX: Use faculty_user.id directly
+            LeaveRequest.assigned_proctor_id == faculty_user.id,
             LeaveRequest.is_deleted == False,  # noqa: E712
         )
         .options(
@@ -411,20 +379,18 @@ async def get_proctor_requests(
         "items": [_build_response(r) for r in items],
     }
 
-
 async def proctor_decide(
     request_id: uuid.UUID,
     faculty_user: User,
     decision: str,
     remarks: str | None,
     db: AsyncSession,
-    background_tasks: BackgroundTasks, # NEW
+    background_tasks: BackgroundTasks, 
 ) -> LeaveRequestResponse:
     req = await _load_request(request_id, db)
-    faculty = faculty_user.faculty_profile
 
-    # Ownership: only the assigned proctor can decide
-    if req.assigned_proctor_id != faculty.id:
+    # FIX: Check ownership using faculty_user.id directly
+    if req.assigned_proctor_id != faculty_user.id:
         raise ForbiddenError("This request is not assigned to you")
 
     if req.status != LeaveStatus.PENDING_PROCTOR:
@@ -434,6 +400,7 @@ async def proctor_decide(
 
     student_user = req.student.user
     proctor_user = faculty_user
+    proctor = req.assigned_proctor # Already eagerly loaded from _load_request!
 
     if decision == "APPROVE":
         req.status          = LeaveStatus.PENDING_HOD
@@ -449,7 +416,7 @@ async def proctor_decide(
             start_date=req.start_date,
             end_date=req.end_date,
             duration_days=req.duration_days,
-            proctor_honorific=faculty_user.faculty_profile.honorific,
+            proctor_honorific=proctor.honorific, # FIX: Use eagerly loaded honorific
             proctor_name=proctor_user.full_name,
             proctor_remarks=remarks,
             pdf_url=pdf_url,
@@ -465,14 +432,13 @@ async def proctor_decide(
             student_name=student_user.full_name,
             start_date=req.start_date,
             end_date=req.end_date,
-            proctor_honorific=req.assigned_proctor.honorific,
+            proctor_honorific=proctor.honorific, # FIX: Use eagerly loaded honorific
             proctor_name=proctor_user.full_name,
             remarks=remarks or "",
         )
 
     await db.flush()
     return _build_response(req)
-
 
 # ── HOD actions ───────────────────────────────────────────────────────────────
 

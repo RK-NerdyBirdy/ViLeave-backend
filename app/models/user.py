@@ -119,7 +119,7 @@ class Faculty(Base):
     phone_number: Mapped[str] = mapped_column(String(20), nullable=False)
     designation: Mapped[str] = mapped_column(String(100), nullable=False)
     honorific: Mapped[str] = mapped_column(String(20), nullable=False)  # Dr., Prof., etc.
-
+    active_token_role: UserRole | None = None
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="faculty_profile")
     assigned_students: Mapped[list["Student"]] = relationship(
