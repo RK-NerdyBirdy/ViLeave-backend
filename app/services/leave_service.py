@@ -555,5 +555,5 @@ async def hod_decide(
         )
 
     await db.flush()
-    req = await _load_request(request_id, db)
+    req = await _load_request(request_id, db, allow_deleted=True)
     return _build_response(req)
