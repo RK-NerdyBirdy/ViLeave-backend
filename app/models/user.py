@@ -38,6 +38,9 @@ class User(Base):
     Google OAuth email is the unique identifier used for login.
     """
     __tablename__ = "users"
+    
+    # ADDED HERE: Tells SQLAlchemy to ignore attributes without Mapped[]
+    __allow_unmapped__ = True
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -56,6 +59,9 @@ class User(Base):
         DateTime(timezone=True), server_default=func.now(),
         onupdate=func.now(), nullable=False
     )
+
+    # ADDED HERE: Unmapped property for runtime session state
+    active_token_role: UserRole | None = None
 
     # Relationships — populated only for the matching role
     student_profile: Mapped["Student | None"] = relationship(
@@ -108,6 +114,8 @@ class Faculty(Base):
     in the regular proctor workflow.
     """
     __tablename__ = "faculty"
+    
+    # REMOVED __allow_unmapped__ from here
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"),
@@ -119,7 +127,9 @@ class Faculty(Base):
     phone_number: Mapped[str] = mapped_column(String(20), nullable=False)
     designation: Mapped[str] = mapped_column(String(100), nullable=False)
     honorific: Mapped[str] = mapped_column(String(20), nullable=False)  # Dr., Prof., etc.
-    active_token_role: UserRole | None = None
+    
+    # REMOVED active_token_role from here
+
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="faculty_profile")
     assigned_students: Mapped[list["Student"]] = relationship(
