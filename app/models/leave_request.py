@@ -41,7 +41,7 @@ TERMINAL_STATES = {
 
 class LeaveRequest(Base):
     __tablename__ = "leave_requests"
-    __allow_unmapped__ = True
+
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
