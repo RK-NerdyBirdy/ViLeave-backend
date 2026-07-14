@@ -11,8 +11,7 @@ import uuid
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, Query, UploadFile, status
-
+from fastapi import APIRouter, File, Form, Query, UploadFile, status, BackgroundTasks
 from app.dependencies import CurrentUser, DBSession, FacultyUser, HODUser, StudentUser
 from app.models.leave_request import LeaveStatus
 from app.schemas.leave_request import (
@@ -63,38 +62,23 @@ async def _validate_pdf(pdf_file: UploadFile) -> bytes:
 async def submit_leave_request(
     current_user: StudentUser,
     db: DBSession,
+    background_tasks: BackgroundTasks,  # NEW
     start_date: Annotated[date, Form(description="Leave start date (YYYY-MM-DD)")],
     end_date: Annotated[date, Form(description="Leave end date (YYYY-MM-DD)")],
     pdf_file: Annotated[UploadFile, File(description="Medical certificate PDF (max 10MB)")],
 ):
-    """
-    Submit a new medical leave request.
-
-    **Multipart form data:**
-    - `start_date`: YYYY-MM-DD (Can be in the past)
-    - `end_date`: YYYY-MM-DD
-    - `pdf_file`: Medical certificate (PDF, max 10MB)
-
-    Validates:
-    - Duration ≤ HOD's global max_leave_days (Checked in service layer)
-    - No overlapping active request for the same period
-
-    On success: uploads PDF to R2, creates DB record, emails the assigned proctor.
-    """
-    # 1. Basic sanity check: end date cannot be before start date
     if end_date < start_date:
         raise BadRequestError("end_date must be on or after start_date")
 
-    # 2. Validate the PDF
     pdf_bytes = await _validate_pdf(pdf_file)
 
-    # 3. Pass to service layer (Duration check happens here)
     return await leave_service.create_leave_request(
         student_user=current_user,
         start_date=start_date,
         end_date=end_date,
         pdf_bytes=pdf_bytes,
         db=db,
+        background_tasks=background_tasks, # NEW
     )
 
 
@@ -254,20 +238,15 @@ async def proctor_decision(
     body: ProctorDecision,
     current_user: FacultyUser,
     db: DBSession,
+    background_tasks: BackgroundTasks, # NEW
 ):
-    """
-    Submit the proctor's decision on a leave request.
-
-    **`decision: "APPROVE"`** → Status moves to `PENDING_HOD`. HOD is emailed.
-    **`decision: "REJECT"`** → Status moves to `REJECTED_BY_PROCTOR`. Student is emailed.
-    `remarks` is **required** when rejecting.
-    """
     return await leave_service.proctor_decide(
         request_id=request_id,
         faculty_user=current_user,
         decision=body.decision,
         remarks=body.remarks,
         db=db,
+        background_tasks=background_tasks, # NEW
     )
 
 
@@ -315,25 +294,13 @@ async def hod_decision(
     body: HODDecision,
     current_user: HODUser,
     db: DBSession,
+    background_tasks: BackgroundTasks, # NEW
 ):
-    """
-    Submit the HOD's final decision.
-
-    **`decision: "APPROVE"`**
-    - Status → `APPROVED`
-    - PDF retained in R2
-    - Student receives approval email
-
-    **`decision: "REJECT"`**
-    - PDF hard-deleted from R2
-    - Sensitive fields nullified (proctor_remarks, hod_remarks, pdf_r2_key)
-    - Record soft-deleted (is_deleted = true)
-    - Student AND proctor receive rejection emails
-    """
     return await leave_service.hod_decide(
         request_id=request_id,
         hod_user=current_user,
         decision=body.decision,
         remarks=body.remarks,
         db=db,
+        background_tasks=background_tasks, # NEW
     )

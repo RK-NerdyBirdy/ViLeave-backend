@@ -10,7 +10,7 @@ from datetime import date, datetime, timezone
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-
+from fastapi import BackgroundTasks
 from app.models.leave_request import LeaveRequest, LeaveStatus, TERMINAL_STATES
 from app.models.system_config import SystemConfig
 from app.models.user import Faculty, Student, User, UserRole
@@ -31,13 +31,13 @@ async def _get_max_leave_days(db: AsyncSession) -> int:
 
 async def _get_hod_user(db: AsyncSession) -> User:
     result = await db.execute(
-        # UPDATED: Use .contains() to search inside the PostgreSQL array
         select(User).where(
-            User.roles.contains([UserRole.HOD]), 
+            User.roles.contains([UserRole.HOD]),
             User.is_active == True  # noqa: E712
         )
     )
-    hod = result.scalar_one_or_none()
+    hod = result.scalars().first() 
+    
     if not hod:
         raise BadRequestError("No active HOD found in the system")
     return hod
@@ -142,6 +142,7 @@ async def create_leave_request(
     end_date: date,
     pdf_bytes: bytes,
     db: AsyncSession,
+    background_tasks: BackgroundTasks, # NEW
 ) -> LeaveRequestResponse:
     """
     Submit a new leave request.
@@ -191,9 +192,10 @@ async def create_leave_request(
     # 5. Email proctor (fire-and-forget — failure doesn't abort the request)
     proctor = leave_req.assigned_proctor
     proctor_user = proctor.user
-    pdf_url = storage.generate_presigned_url(r2_key, expires_in=86400)   # 24h for email links
+    pdf_url = storage.generate_presigned_url(r2_key, expires_in=86400)
 
-    await email_service.notify_proctor_new_request(
+    background_tasks.add_task(
+        email_service.notify_proctor_new_request,
         proctor_email=proctor_user.email,
         proctor_honorific=proctor.honorific,
         proctor_name=proctor_user.full_name,
@@ -355,12 +357,11 @@ async def get_leave_request(
 ) -> LeaveRequestResponse:
     req = await _load_request(request_id, db)
 
-    # UPDATED: Use active_token_role instead of role
-    if current_user.active_token_role == UserRole.STUDENT:
+    if current_user.roles == UserRole.STUDENT:
         if req.student.user.id != current_user.id:
             raise ForbiddenError("You can only view your own leave requests")
 
-    elif current_user.active_token_role == UserRole.FACULTY:
+    elif current_user.roles == UserRole.FACULTY:
         if req.assigned_proctor.user.id != current_user.id:
             raise ForbiddenError("You can only view requests assigned to you")
 
@@ -417,6 +418,7 @@ async def proctor_decide(
     decision: str,
     remarks: str | None,
     db: AsyncSession,
+    background_tasks: BackgroundTasks, # NEW
 ) -> LeaveRequestResponse:
     req = await _load_request(request_id, db)
     faculty = faculty_user.faculty_profile
@@ -436,11 +438,11 @@ async def proctor_decide(
     if decision == "APPROVE":
         req.status          = LeaveStatus.PENDING_HOD
         req.proctor_remarks = remarks
-
-        # Notify HOD
         hod = await _get_hod_user(db)
         pdf_url = storage.generate_presigned_url(req.pdf_r2_key, expires_in=86400) if req.pdf_r2_key else ""
-        await email_service.notify_hod_pending_review(
+        
+        background_tasks.add_task(
+            email_service.notify_hod_pending_review,
             hod_email=hod.email,
             student_name=student_user.full_name,
             student_reg_no=req.student.registration_no,
@@ -457,7 +459,8 @@ async def proctor_decide(
         req.status          = LeaveStatus.REJECTED_BY_PROCTOR
         req.proctor_remarks = remarks
 
-        await email_service.notify_student_rejected_by_proctor(
+        background_tasks.add_task(
+            email_service.notify_student_rejected_by_proctor,
             student_email=student_user.email,
             student_name=student_user.full_name,
             start_date=req.start_date,
@@ -522,6 +525,7 @@ async def hod_decide(
     decision: str,
     remarks: str | None,
     db: AsyncSession,
+    background_tasks: BackgroundTasks, # NEW
 ) -> LeaveRequestResponse:
     req = await _load_request(request_id, db)
 
@@ -538,7 +542,8 @@ async def hod_decide(
         req.status      = LeaveStatus.APPROVED
         req.hod_remarks = remarks
 
-        await email_service.notify_student_approved(
+        background_tasks.add_task(
+            email_service.notify_student_approved,
             student_email=student_user.email,
             student_name=student_user.full_name,
             start_date=req.start_date,
@@ -564,7 +569,8 @@ async def hod_decide(
         req.deleted_at      = datetime.now(timezone.utc)
 
         # 3. Notify student AND proctor concurrently
-        await email_service.notify_hod_rejection(
+        background_tasks.add_task(
+            email_service.notify_hod_rejection,
             student_email=student_user.email,
             student_name=student_user.full_name,
             proctor_email=proctor_user.email,
