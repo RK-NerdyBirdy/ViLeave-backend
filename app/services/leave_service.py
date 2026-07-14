@@ -31,12 +31,17 @@ async def _get_max_leave_days(db: AsyncSession) -> int:
 
 async def _get_hod_user(db: AsyncSession) -> User:
     result = await db.execute(
-        select(User).where(User.role == UserRole.HOD, User.is_active == True)  # noqa: E712
+        # UPDATED: Use .contains() to search inside the PostgreSQL array
+        select(User).where(
+            User.roles.contains([UserRole.HOD]), 
+            User.is_active == True  # noqa: E712
+        )
     )
     hod = result.scalar_one_or_none()
     if not hod:
         raise BadRequestError("No active HOD found in the system")
     return hod
+
 
 
 async def _load_request(request_id: uuid.UUID, db: AsyncSession) -> LeaveRequest:
