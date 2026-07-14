@@ -44,18 +44,22 @@ async def _get_hod_user(db: AsyncSession) -> User:
 
 
 
-async def _load_request(request_id: uuid.UUID, db: AsyncSession) -> LeaveRequest:
-    """Fetch a non-deleted leave request with all relationships eagerly loaded."""
-    result = await db.execute(
-        select(LeaveRequest)
-        .where(LeaveRequest.id == request_id, LeaveRequest.is_deleted == False)  # noqa: E712
-        .options(
-            selectinload(LeaveRequest.student).selectinload(Student.user),
-            selectinload(LeaveRequest.student).selectinload(Student.proctor).selectinload(Faculty.user),
-            selectinload(LeaveRequest.assigned_proctor).selectinload(Faculty.user),
-        )
+async def _load_request(request_id: uuid.UUID, db: AsyncSession, allow_deleted: bool = False) -> LeaveRequest:
+    """Fetch a leave request with all relationships eagerly loaded."""
+    query = select(LeaveRequest).where(LeaveRequest.id == request_id)
+    
+    if not allow_deleted:
+        query = query.where(LeaveRequest.is_deleted == False)  # noqa: E712
+        
+    query = query.options(
+        selectinload(LeaveRequest.student).selectinload(Student.user),
+        selectinload(LeaveRequest.student).selectinload(Student.proctor).selectinload(Faculty.user),
+        selectinload(LeaveRequest.assigned_proctor).selectinload(Faculty.user),
     )
+    
+    result = await db.execute(query)
     req = result.scalar_one_or_none()
+    
     if not req:
         raise NotFoundError("Leave request", str(request_id))
     return req
@@ -247,7 +251,7 @@ async def update_leave_request(
     req.end_date     = new_end
     req.duration_days = duration
     await db.flush()
-
+    req = await _load_request(request_id, db)
     return _build_response(req)
 
 
@@ -438,6 +442,7 @@ async def proctor_decide(
         )
 
     await db.flush()
+    req = await _load_request(request_id, db)
     return _build_response(req)
 
 # ── HOD actions ───────────────────────────────────────────────────────────────
@@ -550,4 +555,5 @@ async def hod_decide(
         )
 
     await db.flush()
+    req = await _load_request(request_id, db)
     return _build_response(req)
