@@ -21,7 +21,10 @@ from email.mime.text import MIMEText
 from typing import Sequence
 
 import aiosmtplib
+import logging
+import asyncio
 
+logger = logging.getLogger(__name__)
 from app.config import get_settings
 
 settings = get_settings()
@@ -290,17 +293,24 @@ async def _send_email(payload: EmailPayload) -> None:
     )
 
 
-async def _send_safe(payload: EmailPayload) -> None:
+async def _send_safe(payload: EmailPayload, max_retries: int = 3) -> None:
     """
-    Fire-and-forget wrapper.
-    Email delivery failure should never abort a leave workflow state transition.
-    Log the error but don't re-raise.
+    Attempts to send an email multiple times with exponential backoff.
     """
-    try:
-        await _send_email(payload)
-    except Exception as exc:
-        # In production, replace with your structured logger (e.g. structlog)
-        print(f"[EMAIL ERROR] Failed to send to {payload.to}: {exc}")
+    for attempt in range(1, max_retries + 1):
+        try:
+            await _send_email(payload)
+            # If successful, break out of the loop
+            return 
+            
+        except Exception as exc:
+            logger.error(f"[EMAIL ERROR] Attempt {attempt}/{max_retries} failed for {payload.to}: {exc}")
+            
+            if attempt == max_retries:
+                logger.error(f"[EMAIL FATAL] Giving up on email to {payload.to}. Final error: {exc}")
+            else:
+                # Wait 2 seconds, then 4 seconds before retrying
+                await asyncio.sleep(2 ** attempt)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
