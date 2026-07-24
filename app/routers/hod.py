@@ -8,6 +8,7 @@ HOD-only endpoints:
   - Leave request export as ZIP (with PDFs and manifest)
 """
 import uuid
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, File, Query, UploadFile, status
@@ -43,29 +44,49 @@ router = APIRouter(prefix="/hod", tags=["HOD"])
 
 @router.get("/config", response_model=SystemConfigResponse, summary="Get global leave config")
 async def get_config(current_user: HODUser, db: DBSession):
-    """Returns the current maximum allowed leave days set by the HOD."""
+    """Returns the current configurable leave limits set by the HOD."""
     result = await db.execute(select(SystemConfig).where(SystemConfig.id == 1))
     config = result.scalar_one_or_none()
     if not config:
         # Return default if not yet configured
-        return SystemConfigResponse(max_leave_days=7, updated_at=None)
+        return SystemConfigResponse(
+            max_od_days=7,
+            max_medical_days=7,
+            special_request_threshold_days=5,
+            cat_2_start_date=date.today(),
+            updated_at=None,
+        )
     return config
 
 
 @router.put("/config", response_model=SystemConfigResponse, summary="Update global leave config")
 async def update_config(body: SystemConfigUpdate, current_user: HODUser, db: DBSession):
     """
-    Set the maximum number of medical leave days a student may apply for.
+    Set the maximum number of OD and medical leave days a student may apply for,
+    plus the threshold that routes a request through HOD pre-approval.
     Uses upsert — safe to call even before the row exists.
     """
     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
     stmt = (
         pg_insert(SystemConfig)
-        .values(id=1, max_leave_days=body.max_leave_days, updated_by=current_user.id)
+        .values(
+            id=1,
+            max_od_days=body.max_od_days,
+            max_medical_days=body.max_medical_days,
+            special_request_threshold_days=body.special_request_threshold_days,
+            cat_2_start_date=body.cat_2_start_date,
+            updated_by=current_user.id,
+        )
         .on_conflict_do_update(
             index_elements=["id"],
-            set_={"max_leave_days": body.max_leave_days, "updated_by": current_user.id},
+            set_={
+                "max_od_days": body.max_od_days,
+                "max_medical_days": body.max_medical_days,
+                "special_request_threshold_days": body.special_request_threshold_days,
+                "cat_2_start_date": body.cat_2_start_date,
+                "updated_by": current_user.id,
+            },
         )
     )
     await db.execute(stmt)

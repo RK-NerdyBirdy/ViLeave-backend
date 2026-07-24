@@ -13,7 +13,7 @@ from app.schemas.user import (
 from app.schemas.leave_request import (
     LeaveRequestCreate, LeaveRequestResponse,
     LeaveRequestUpdate, PaginatedLeaveRequests,
-    ProctorDecision, HODDecision,
+    ProctorDecision, HODDecision, HODSpecialDecision,
 )
 from app.schemas.system_config import SystemConfigResponse, SystemConfigUpdate
 
@@ -27,6 +27,6 @@ __all__ = [
     "BulkIngestResponse", "BulkIngestError",
     "LeaveRequestCreate", "LeaveRequestResponse",
     "LeaveRequestUpdate", "PaginatedLeaveRequests",
-    "ProctorDecision", "HODDecision",
+    "ProctorDecision", "HODDecision", "HODSpecialDecision",
     "SystemConfigResponse", "SystemConfigUpdate",
 ]

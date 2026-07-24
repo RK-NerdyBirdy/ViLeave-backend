@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 from app.config import get_settings
 from app.database import AsyncSessionLocal
 from app.routers import auth, faculty, hod, leave_requests, students
+from app.services.email_queue import EmailQueueManager
 from app.services.token_blocklist import load_blocklist_to_memory, prune_expired_tokens
 from app.utils.exceptions import BadRequestError
 
@@ -73,15 +74,26 @@ async def lifespan(app: FastAPI):
     pruner_task = asyncio.create_task(_blocklist_pruner())
     logger.info("Token blocklist pruner started")
 
-    yield   # ← Application runs here
+    # 3. Start the in-memory email queue worker
+    email_queue = EmailQueueManager()
+    app.state.email_queue = email_queue
+    await email_queue.start()
+    logger.info("Email queue worker started")
 
-    # 3. Shutdown
-    pruner_task.cancel()
     try:
-        await pruner_task
-    except asyncio.CancelledError:
-        pass
-    logger.info("Medical Leave Platform API shut down cleanly")
+        yield   # ← Application runs here
+    finally:
+        # 4. Shutdown the email worker first so queued mail can finish draining.
+        await email_queue.stop()
+        logger.info("Email queue worker stopped")
+
+        # 5. Shutdown the periodic token pruner.
+        pruner_task.cancel()
+        try:
+            await pruner_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Medical Leave Platform API shut down cleanly")
 
 
 # ── Application factory ───────────────────────────────────────────────────────

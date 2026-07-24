@@ -186,6 +186,33 @@ def _hod_pending_review_html(
     return _base_template("Leave Request — HOD Approval Required", body, "#7C3AED")
 
 
+def _hod_special_request_html(
+    student_name: str,
+    student_reg_no: str,
+    leave_type: str,
+    student_reason: str,
+    start_date: date,
+    end_date: date,
+    duration_days: int,
+    pdf_url: str,
+) -> str:
+    body = f"""
+    <p>Dear HOD,</p>
+    <p>A leave request has exceeded the special-request threshold and requires your pre-approval before it can reach the proctor.</p>
+    {_details_table(
+        _detail_row("Student", student_name),
+        _detail_row("Reg. No.", student_reg_no),
+        _detail_row("Leave Type", leave_type),
+        _detail_row("Reason", student_reason),
+        _detail_row("From", start_date.strftime("%d %b %Y")),
+        _detail_row("To", end_date.strftime("%d %b %Y")),
+        _detail_row("Duration", f"{duration_days} day{'s' if duration_days != 1 else ''}"),
+    )}
+    {_pdf_button(pdf_url)}
+    """
+    return _base_template("Special Leave Request — HOD Pre-Approval Required", body, "#7C3AED")
+
+
 def _student_approved_html(student_name: str, start_date: date, end_date: date, duration_days: int) -> str:
     body = f"""
     <p>Dear {student_name},</p>
@@ -247,6 +274,26 @@ def _student_rejected_by_hod_html(
     return _base_template("Leave Request Rejected by HOD", body, "#DC2626")
 
 
+def _student_special_rejected_by_hod_html(
+    student_name: str,
+    start_date: date,
+    end_date: date,
+    hod_remarks: str | None,
+) -> str:
+    body = f"""
+    <p>Dear {student_name},</p>
+    <p>Your special leave request has been <strong style="color:#DC2626;">rejected</strong>
+       by the Head of Department during the pre-approval stage.</p>
+    {_details_table(
+        _detail_row("From", start_date.strftime("%d %b %Y")),
+        _detail_row("To", end_date.strftime("%d %b %Y")),
+        _detail_row("HOD Remarks", hod_remarks or "No remarks provided"),
+    )}
+    <p>Please contact the HOD's office if you need clarification.</p>
+    """
+    return _base_template("Special Leave Request Rejected by HOD", body, "#DC2626")
+
+
 def _proctor_hod_rejected_html(
     proctor_honorific: str,
     proctor_name: str,
@@ -295,22 +342,11 @@ async def _send_email(payload: EmailPayload) -> None:
 
 async def _send_safe(payload: EmailPayload, max_retries: int = 3) -> None:
     """
-    Attempts to send an email multiple times with exponential backoff.
+    Send one email payload.
+
+    Retry is handled by the queue worker so the SMTP sender stays simple.
     """
-    for attempt in range(1, max_retries + 1):
-        try:
-            await _send_email(payload)
-            # If successful, break out of the loop
-            return 
-            
-        except Exception as exc:
-            logger.error(f"[EMAIL ERROR] Attempt {attempt}/{max_retries} failed for {payload.to}: {exc}")
-            
-            if attempt == max_retries:
-                logger.error(f"[EMAIL FATAL] Giving up on email to {payload.to}. Final error: {exc}")
-            else:
-                # Wait 2 seconds, then 4 seconds before retrying
-                await asyncio.sleep(2 ** attempt)
+    await _send_email(payload)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -354,6 +390,27 @@ async def notify_hod_pending_review(
         html_body=_hod_pending_review_html(
             student_name, student_reg_no, start_date, end_date, duration_days,
             proctor_honorific, proctor_name, proctor_remarks, pdf_url,
+        ),
+    ))
+
+
+async def notify_hod_special_request(
+    hod_email: str,
+    student_name: str,
+    student_reg_no: str,
+    leave_type: str,
+    student_reason: str,
+    start_date: date,
+    end_date: date,
+    duration_days: int,
+    pdf_url: str,
+) -> None:
+    await _send_safe(EmailPayload(
+        to=[hod_email],
+        subject=f"[HOD Action Required] Special Leave Request — {student_name} ({student_reg_no})",
+        html_body=_hod_special_request_html(
+            student_name, student_reg_no, leave_type, student_reason,
+            start_date, end_date, duration_days, pdf_url,
         ),
     ))
 
@@ -420,3 +477,19 @@ async def notify_hod_rejection(
             ),
         )),
     )
+
+
+async def notify_student_rejected_by_hod(
+    student_email: str,
+    student_name: str,
+    start_date: date,
+    end_date: date,
+    hod_remarks: str | None,
+) -> None:
+    await _send_safe(EmailPayload(
+        to=[student_email],
+        subject="Your Special Leave Request Has Been Rejected by HOD",
+        html_body=_student_special_rejected_by_hod_html(
+            student_name, start_date, end_date, hod_remarks,
+        ),
+    ))

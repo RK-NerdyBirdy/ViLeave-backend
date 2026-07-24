@@ -9,10 +9,10 @@ so the HOD can call PUT /hod/config freely without worrying about
 insert-vs-update logic.
 """
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
-    CheckConstraint, DateTime, ForeignKey,
+    CheckConstraint, Date, DateTime, ForeignKey,
     Integer, func,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -29,7 +29,10 @@ class SystemConfig(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
-    max_leave_days: Mapped[int] = mapped_column(Integer, nullable=False, default=7)
+    max_od_days: Mapped[int] = mapped_column(Integer, nullable=False, default=7)
+    max_medical_days: Mapped[int] = mapped_column(Integer, nullable=False, default=7)
+    special_request_threshold_days: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    cat_2_start_date: Mapped[date] = mapped_column(Date, nullable=False, default=date.today)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -41,4 +44,10 @@ class SystemConfig(Base):
     updated_by_user: Mapped["User | None"] = relationship("User")   # type: ignore[name-defined]
 
     def __repr__(self) -> str:
-        return f"<SystemConfig max_leave_days={self.max_leave_days}>"
+        return (
+            "<SystemConfig "
+            f"max_od_days={self.max_od_days} "
+            f"max_medical_days={self.max_medical_days} "
+            f"special_request_threshold_days={self.special_request_threshold_days} "
+            f"cat_2_start_date={self.cat_2_start_date}>"
+        )

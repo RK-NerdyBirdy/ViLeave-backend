@@ -12,6 +12,7 @@ Key design decisions reflected here:
 import uuid
 import enum
 from datetime import date, datetime, timezone
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Boolean, Date, DateTime, Enum, ForeignKey,
@@ -22,13 +23,27 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
+if TYPE_CHECKING:
+    from app.models.user import Faculty, Student
+
 
 class LeaveStatus(str, enum.Enum):
     PENDING_PROCTOR     = "PENDING_PROCTOR"
     PENDING_HOD         = "PENDING_HOD"
+    PENDING_HOD_SPECIAL_APPROVAL = "PENDING_HOD_SPECIAL_APPROVAL"
     APPROVED            = "APPROVED"
     REJECTED_BY_PROCTOR = "REJECTED_BY_PROCTOR"
     REJECTED_BY_HOD     = "REJECTED_BY_HOD"
+
+
+class LeaveType(str, enum.Enum):
+    MEDICAL = "MEDICAL"
+    OD = "OD"
+
+
+class LeavePeriod(str, enum.Enum):
+    CAT_1 = "CAT_1"
+    CAT_2 = "CAT_2"
 
 
 # States from which no further transition is possible
@@ -59,6 +74,17 @@ class LeaveRequest(Base):
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
     duration_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    leave_period: Mapped[LeavePeriod] = mapped_column(
+        Enum(LeavePeriod),
+        nullable=True,
+    )
+    leave_type: Mapped[LeaveType] = mapped_column(
+        Enum(LeaveType),
+        nullable=False,
+        default=LeaveType.MEDICAL,
+    )
+    student_reason: Mapped[str] = mapped_column(String(1000), nullable=False)
+    is_special_request: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # ── Workflow ──────────────────────────────────────────────────────────────
     status: Mapped[LeaveStatus] = mapped_column(

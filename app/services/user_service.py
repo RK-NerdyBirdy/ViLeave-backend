@@ -226,7 +226,11 @@ async def soft_delete_faculty(faculty_uuid: uuid.UUID, db: AsyncSession) -> None
         select(func.count(LeaveRequest.id)).where(
             LeaveRequest.assigned_proctor_id == faculty_uuid,
             LeaveRequest.is_deleted == False,  # noqa: E712
-            LeaveRequest.status.in_([LeaveStatus.PENDING_PROCTOR, LeaveStatus.PENDING_HOD]),
+            LeaveRequest.status.in_([
+                LeaveStatus.PENDING_PROCTOR,
+                LeaveStatus.PENDING_HOD,
+                LeaveStatus.PENDING_HOD_SPECIAL_APPROVAL,
+            ]),
         )
     )
     pending_count = pending_result.scalar_one()

@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.models.leave_request import LeaveStatus
+from app.models.leave_request import LeavePeriod, LeaveStatus, LeaveType
 
 
 class LeaveRequestCreate(BaseModel):
@@ -15,15 +15,17 @@ class LeaveRequestCreate(BaseModel):
     Used internally after parsing multipart form data.
     The actual endpoint uses Form() + UploadFile directly.
     """
+    leave_type: LeaveType = LeaveType.MEDICAL
+    student_reason: str
     start_date: date
     end_date: date
 
     @model_validator(mode="after")
     def validate_dates(self) -> "LeaveRequestCreate":
+        if not self.student_reason.strip():
+            raise ValueError("student_reason cannot be empty")
         if self.end_date < self.start_date:
             raise ValueError("end_date must be on or after start_date")
-        if self.start_date < date.today():
-            raise ValueError("start_date cannot be in the past")
         return self
 
 
@@ -62,9 +64,13 @@ class LeaveRequestResponse(BaseModel):
     id: uuid.UUID
     student: StudentEmbedded
     assigned_proctor: ProctorEmbedded
+    leave_type: LeaveType
+    leave_period: LeavePeriod | None
+    student_reason: str
     start_date: date
     end_date: date
     duration_days: int
+    is_special_request: bool
     status: LeaveStatus
     proctor_remarks: str | None
     hod_remarks: str | None
@@ -98,3 +104,10 @@ class ProctorDecision(BaseModel):
 class HODDecision(BaseModel):
     decision: Literal["APPROVE", "REJECT"]
     remarks: str | None = Field(None, max_length=1000)
+    assigned_leave_period: LeavePeriod | None = None
+
+
+class HODSpecialDecision(BaseModel):
+    decision: Literal["APPROVE", "REJECT"]
+    remarks: str | None = Field(None, max_length=1000)
+    assigned_leave_period: LeavePeriod | None = None

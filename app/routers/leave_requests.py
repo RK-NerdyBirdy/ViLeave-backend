@@ -11,10 +11,11 @@ import uuid
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, Query, UploadFile, status, BackgroundTasks
+from fastapi import APIRouter, File, Form, Query, Request, UploadFile, status
 from app.dependencies import CurrentUser, DBSession, FacultyUser, HODUser, StudentUser
-from app.models.leave_request import LeaveStatus
+from app.models.leave_request import LeaveStatus, LeaveType
 from app.schemas.leave_request import (
+    HODSpecialDecision,
     HODDecision,
     LeaveRequestResponse,
     PaginatedLeaveRequests,
@@ -62,10 +63,12 @@ async def _validate_pdf(pdf_file: UploadFile) -> bytes:
 async def submit_leave_request(
     current_user: StudentUser,
     db: DBSession,
-    background_tasks: BackgroundTasks,  # NEW
+    request: Request,
+    student_reason: Annotated[str, Form(description="Reason for the leave request")],
     start_date: Annotated[date, Form(description="Leave start date (YYYY-MM-DD)")],
     end_date: Annotated[date, Form(description="Leave end date (YYYY-MM-DD)")],
     pdf_file: Annotated[UploadFile, File(description="Medical certificate PDF (max 10MB)")],
+    leave_type: Annotated[LeaveType, Form(description="Leave type: MEDICAL or OD")] = LeaveType.MEDICAL,
 ):
     if end_date < start_date:
         raise BadRequestError("end_date must be on or after start_date")
@@ -74,11 +77,13 @@ async def submit_leave_request(
 
     return await leave_service.create_leave_request(
         student_user=current_user,
+        leave_type=leave_type,
+        student_reason=student_reason,
         start_date=start_date,
         end_date=end_date,
         pdf_bytes=pdf_bytes,
         db=db,
-        background_tasks=background_tasks, # NEW
+        email_queue=request.app.state.email_queue,
     )
 
 
@@ -238,7 +243,7 @@ async def proctor_decision(
     body: ProctorDecision,
     current_user: FacultyUser,
     db: DBSession,
-    background_tasks: BackgroundTasks, # NEW
+    request: Request,
 ):
     return await leave_service.proctor_decide(
         request_id=request_id,
@@ -246,7 +251,7 @@ async def proctor_decision(
         decision=body.decision,
         remarks=body.remarks,
         db=db,
-        background_tasks=background_tasks, # NEW
+        email_queue=request.app.state.email_queue,
     )
 
 
@@ -294,13 +299,37 @@ async def hod_decision(
     body: HODDecision,
     current_user: HODUser,
     db: DBSession,
-    background_tasks: BackgroundTasks, # NEW
+    request: Request,
 ):
     return await leave_service.hod_decide(
         request_id=request_id,
         hod_user=current_user,
         decision=body.decision,
         remarks=body.remarks,
+        assigned_leave_period=body.assigned_leave_period,
         db=db,
-        background_tasks=background_tasks, # NEW
+        email_queue=request.app.state.email_queue,
+    )
+
+
+@router.patch(
+    "/{request_id}/hod-special-decision",
+    response_model=LeaveRequestResponse,
+    summary="Approve or reject a special leave request pre-approval (HOD only)",
+)
+async def hod_special_decision(
+    request_id: uuid.UUID,
+    body: HODSpecialDecision,
+    current_user: HODUser,
+    db: DBSession,
+    request: Request,
+):
+    return await leave_service.hod_special_decide(
+        request_id=request_id,
+        hod_user=current_user,
+        decision=body.decision,
+        remarks=body.remarks,
+        assigned_leave_period=body.assigned_leave_period,
+        db=db,
+        email_queue=request.app.state.email_queue,
     )
